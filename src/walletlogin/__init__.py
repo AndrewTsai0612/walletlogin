@@ -10,4 +10,4 @@ from .core import WalletLoginCore, WalletLoginError
 from .store import LoginSession, MemoryStore, SessionStore
 
 __all__ = ["WalletLoginCore", "WalletLoginError", "SessionStore", "MemoryStore", "LoginSession"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

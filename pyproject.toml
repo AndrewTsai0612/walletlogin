@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "walletlogin"
-version = "0.2.0"
+version = "0.3.0"
 description = "以錢包簽章取代帳號密碼的無密碼登入套件"
 readme = "README.md"
 license = { text = "MIT" }
