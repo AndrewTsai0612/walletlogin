@@ -25,6 +25,9 @@ class LoginSession:
     mode: str = "cross_device"
     # same_device 模式：簽名後 App 要切回的網頁網址
     return_url: Optional[str] = None
+    # 發起登入的瀏覽器：{"browser", "os", "ip"}，給錢包 App 顯示，防止 QR Code 被轉貼到假網站
+    requester: Optional[dict] = None
+    created_at: float = 0.0
     # 驗證成功後填入
     address: Optional[str] = None
     # same_device 模式：驗證成功後產生的一次性兌換碼，網頁必須出示才能領取登入

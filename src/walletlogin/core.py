@@ -11,6 +11,11 @@
                   App 把它帶回同一支手機的瀏覽器，網頁必須出示兌換碼才能領取登入。
                   這樣就算駭客把自己發起的登入連結騙受害者點開，登入結果也不會落到駭客手上。
 
+發起裝置資訊：
+    建立登入請求時記下發起者的瀏覽器、作業系統、IP。錢包 App 掃碼後用 info_url 直接向網站查詢
+    （不放在 QR Code 裡，因為 QR Code 可以被竄改），顯示在確認畫面。駭客把真網站的 QR Code
+    轉貼到假網站時，使用者會看到發起者是駭客的裝置，而不是自己眼前的這台。
+
 網站框架的轉接層（例如 walletlogin.fastapi）只負責把 HTTP 請求轉給這裡。
 """
 import base64
@@ -25,6 +30,7 @@ from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address
 
 from . import siwe
+from .device import describe_user_agent
 from .store import LoginSession, MemoryStore, SessionStore
 from .tokens import InvalidToken, TokenIssuer
 
@@ -50,6 +56,7 @@ class WalletLoginCore:
         secret: str,
         *,
         verify_path: str = "/walletlogin/verify",
+        info_path: str = "/walletlogin/info",
         on_login: Optional[Callable[[str], object]] = None,
         store: Optional[SessionStore] = None,
         session_ttl: int = 300,
@@ -59,6 +66,7 @@ class WalletLoginCore:
         origin:      網站對外的網址，例如 "https://shop.example.com"。手機會看到並簽署這個網域
         secret:      簽發 JWT 用的密鑰，每個網站要有自己的
         verify_path: 手機送出簽名的路徑，會和 origin 組成 QR Code 中的 verify_url
+        info_path:   手機查詢發起裝置資訊的路徑，會和 origin 組成 QR Code 中的 info_url
         on_login:    登入成功時呼叫，參數為錢包地址，網站可以在這裡建立或更新會員
         store:       登入請求暫存，預設放在記憶體
         session_ttl: 登入請求（QR Code）的有效秒數
@@ -67,6 +75,7 @@ class WalletLoginCore:
         self.origin = _normalize_origin(origin)
         self.domain = urlsplit(self.origin).netloc
         self.verify_url = self.origin + verify_path
+        self.info_url = self.origin + info_path
         self._on_login = on_login
         self._store = store or MemoryStore()
         self._session_ttl = session_ttl
@@ -74,8 +83,17 @@ class WalletLoginCore:
 
     # ---------- 1. 網頁建立登入請求 ----------
 
-    def create_session(self, mode: str = CROSS_DEVICE, return_url: Optional[str] = None) -> dict:
+    def create_session(
+        self,
+        mode: str = CROSS_DEVICE,
+        return_url: Optional[str] = None,
+        *,
+        user_agent: Optional[str] = None,
+        ip: Optional[str] = None,
+    ) -> dict:
         """建立登入請求。
+
+        user_agent、ip 是發起登入的瀏覽器資訊，錢包 App 會顯示給使用者確認。
 
         mode=same_device 時必須提供 return_url（發起登入的網頁網址），而且必須屬於本網站，
         否則駭客可以把返回網址設成自己的網站，直接拿走兌換碼。
@@ -94,6 +112,8 @@ class WalletLoginCore:
             expires_at=time.time() + self._session_ttl,
             mode=mode,
             return_url=return_url,
+            requester=_requester(user_agent, ip),
+            created_at=time.time(),
         )
         self._store.save(session)
 
@@ -106,6 +126,7 @@ class WalletLoginCore:
             "session_id": session.session_id,
             "nonce": session.nonce,
             "verify_url": self.verify_url,
+            "info_url": self.info_url,
         }
         if mode == SAME_DEVICE:
             payload["mode"] = SAME_DEVICE
@@ -131,6 +152,20 @@ class WalletLoginCore:
             raise WalletLoginError(400, "返回網址必須屬於本網站")
         # 去掉 # 之後的內容，App 會把兌換碼放在那裡
         return return_url.split("#", 1)[0]
+
+    # ---------- 手機查詢發起裝置 ----------
+
+    def request_info(self, session_id: str) -> dict:
+        """回傳發起這個登入請求的裝置資訊，給錢包 App 顯示。"""
+        session = self._store.get(session_id)
+        if session is None:
+            raise WalletLoginError(404, "登入請求不存在或已過期")
+        requester = session.requester or _requester(None, None)
+        return {
+            **requester,
+            "age_seconds": max(0, int(time.time() - session.created_at)),
+            "mode": session.mode,
+        }
 
     # ---------- 2. 手機送出簽名 ----------
 
@@ -210,6 +245,11 @@ class WalletLoginCore:
             return self._tokens.verify(token)
         except InvalidToken as e:
             raise WalletLoginError(401, e.message)
+
+
+def _requester(user_agent: Optional[str], ip: Optional[str]) -> dict:
+    browser, system = describe_user_agent(user_agent or "")
+    return {"browser": browser, "os": system, "ip": ip or "未知"}
 
 
 def _normalize_origin(origin: str) -> str:

@@ -14,12 +14,13 @@
     POST {prefix}/session          網頁：建立登入請求
     POST {prefix}/verify           手機：送出簽名
     POST {prefix}/status           網頁：詢問登入狀態
+    GET  {prefix}/info             手機：查詢發起登入的裝置
     GET  {prefix}/walletlogin.js   前端元件
 """
 from pathlib import Path
 from typing import Callable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -61,6 +62,14 @@ class StatusRequest(BaseModel):
     code: Optional[str] = None  # same_device 模式必填
 
 
+class InfoResponse(BaseModel):
+    browser: str
+    os: str
+    ip: str
+    age_seconds: int  # 幾秒前發起
+    mode: str
+
+
 class StatusResponse(BaseModel):
     status: str  # "pending" | "ok"
     token: Optional[str] = None
@@ -83,6 +92,7 @@ class WalletLogin:
             origin,
             secret,
             verify_path=prefix + "/verify",
+            info_path=prefix + "/info",
             on_login=on_login,
             store=store,
             session_ttl=session_ttl,
@@ -106,10 +116,15 @@ class WalletLogin:
         core = self.core
 
         @router.post("/session", response_model=SessionResponse)
-        def create_session(body: Optional[SessionRequest] = None):
+        def create_session(request: Request, body: Optional[SessionRequest] = None):
             body = body or SessionRequest()
             try:
-                return core.create_session(body.mode, body.return_url)
+                return core.create_session(
+                    body.mode,
+                    body.return_url,
+                    user_agent=request.headers.get("user-agent"),
+                    ip=request.client.host if request.client else None,
+                )
             except WalletLoginError as e:
                 raise HTTPException(status_code=e.status_code, detail=e.message)
 
@@ -120,6 +135,13 @@ class WalletLogin:
             except WalletLoginError as e:
                 raise HTTPException(status_code=e.status_code, detail=e.message)
             return VerifyResponse(ok=True, address=result["address"], code=result["code"])
+
+        @router.get("/info", response_model=InfoResponse)
+        def info(session_id: str):
+            try:
+                return core.request_info(session_id)
+            except WalletLoginError as e:
+                raise HTTPException(status_code=e.status_code, detail=e.message)
 
         @router.post("/status", response_model=StatusResponse)
         def status(body: StatusRequest):
