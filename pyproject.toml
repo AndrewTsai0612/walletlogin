@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "walletlogin"
+version = "0.1.0"
+description = "以錢包簽章取代帳號密碼的無密碼登入套件"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "eth-account>=0.13",
+    "PyJWT>=2.8",
+]
+
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.110"]
+dev = ["fastapi>=0.110", "pytest", "httpx"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+walletlogin = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
