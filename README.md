@@ -19,10 +19,12 @@
 ### 1. 安裝
 
 ```bash
-pip install -e path/to/walletlogin   # 本機開發
+pip install "walletlogin[fastapi] @ git+https://github.com/AndrewTsai0612/walletlogin.git@v0.1.0"
 ```
 
-> 發布到 GitHub 後改用 `pip install git+https://github.com/<帳號>/walletlogin.git`
+`[fastapi]` 會一併安裝 FastAPI；`@v0.1.0` 指定版本，去掉則安裝最新版。
+
+本機開發時也可以直接安裝資料夾：`pip install -e path/to/walletlogin`
 
 ### 2. 後端：加入錢包登入
 
