@@ -30,11 +30,17 @@ from .store import SessionStore
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+class SessionRequest(BaseModel):
+    mode: str = "cross_device"  # "cross_device" | "same_device"
+    return_url: Optional[str] = None  # same_device 模式：簽名後 App 要切回的網頁
+
+
 class SessionResponse(BaseModel):
     session_id: str
     poll_token: str
     qr_payload: str
     expires_in: int
+    app_link: Optional[str] = None  # same_device 模式：開啟錢包 App 的連結
 
 
 class VerifyRequest(BaseModel):
@@ -46,11 +52,13 @@ class VerifyRequest(BaseModel):
 class VerifyResponse(BaseModel):
     ok: bool
     address: str
+    code: Optional[str] = None  # same_device 模式：兌換碼，錢包 App 要帶回瀏覽器
 
 
 class StatusRequest(BaseModel):
     session_id: str
     poll_token: str
+    code: Optional[str] = None  # same_device 模式必填
 
 
 class StatusResponse(BaseModel):
@@ -98,21 +106,25 @@ class WalletLogin:
         core = self.core
 
         @router.post("/session", response_model=SessionResponse)
-        def create_session():
-            return core.create_session()
+        def create_session(body: Optional[SessionRequest] = None):
+            body = body or SessionRequest()
+            try:
+                return core.create_session(body.mode, body.return_url)
+            except WalletLoginError as e:
+                raise HTTPException(status_code=e.status_code, detail=e.message)
 
         @router.post("/verify", response_model=VerifyResponse)
         def verify(body: VerifyRequest):
             try:
-                address = core.verify(body.session_id, body.message, body.signature)
+                result = core.verify(body.session_id, body.message, body.signature)
             except WalletLoginError as e:
                 raise HTTPException(status_code=e.status_code, detail=e.message)
-            return VerifyResponse(ok=True, address=address)
+            return VerifyResponse(ok=True, address=result["address"], code=result["code"])
 
         @router.post("/status", response_model=StatusResponse)
         def status(body: StatusRequest):
             try:
-                return core.poll(body.session_id, body.poll_token)
+                return core.poll(body.session_id, body.poll_token, body.code)
             except WalletLoginError as e:
                 raise HTTPException(status_code=e.status_code, detail=e.message)
 

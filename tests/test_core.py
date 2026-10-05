@@ -23,7 +23,7 @@ def wallet():
 
 
 def _verify(core, payload):
-    return core.verify(payload["session_id"], payload["message"], payload["signature"])
+    return core.verify(payload["session_id"], payload["message"], payload["signature"])["address"]
 
 
 def _error_code(fn, *args):

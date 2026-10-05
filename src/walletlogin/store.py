@@ -21,8 +21,14 @@ class LoginSession:
     # 只有發起登入的網頁知道，用來詢問狀態；不放進 QR Code，避免旁人偷拍 QR 後搶走 JWT
     poll_token: str
     expires_at: float
+    # "cross_device"：電腦顯示 QR Code、手機掃描；"same_device"：手機瀏覽器點按鈕開啟錢包 App
+    mode: str = "cross_device"
+    # same_device 模式：簽名後 App 要切回的網頁網址
+    return_url: Optional[str] = None
     # 驗證成功後填入
     address: Optional[str] = None
+    # same_device 模式：驗證成功後產生的一次性兌換碼，網頁必須出示才能領取登入
+    code: Optional[str] = None
 
     def is_expired(self) -> bool:
         return time.time() > self.expires_at
@@ -38,8 +44,8 @@ class SessionStore:
         """取得尚未過期的登入請求；不存在或已過期回傳 None。"""
         raise NotImplementedError
 
-    def mark_verified(self, session_id: str, address: str) -> bool:
-        """標記為已驗證。同一個請求只能成功一次（防止重放攻擊），重複呼叫回傳 False。"""
+    def mark_verified(self, session_id: str, address: str, code: Optional[str] = None) -> bool:
+        """標記為已驗證並記下兌換碼。同一個請求只能成功一次（防止重放攻擊），重複呼叫回傳 False。"""
         raise NotImplementedError
 
     def delete(self, session_id: str) -> None:
@@ -67,12 +73,13 @@ class MemoryStore(SessionStore):
                 return None
             return session
 
-    def mark_verified(self, session_id: str, address: str) -> bool:
+    def mark_verified(self, session_id: str, address: str, code: Optional[str] = None) -> bool:
         with self._lock:
             session = self._sessions.get(session_id)
             if session is None or session.is_expired() or session.address is not None:
                 return False
             session.address = address
+            session.code = code
             return True
 
     def delete(self, session_id: str) -> None:
