@@ -2,7 +2,12 @@
 
 **以錢包簽章取代帳號密碼的無密碼登入套件。**
 
-使用者用手機錢包 App 掃描網站上的 QR Code、簽名，就能登入。網站不儲存任何密碼，也不需要向任何第三方（例如 Google）註冊。
+使用者用手機錢包 App 簽名就能登入。網站不儲存任何密碼，也不需要向任何第三方（例如 Google）註冊。
+
+- **用電腦瀏覽**：網頁顯示 QR Code，用手機錢包 App 掃描
+- **用手機瀏覽**：網頁顯示「用錢包 App 開啟」按鈕，簽名後自動切回瀏覽器（v0.2.0）
+
+前端元件會依裝置自動選擇，網站不用做任何設定。
 
 ```
 網站 A 的伺服器（裝了 walletlogin）←─┐
@@ -19,10 +24,10 @@
 ### 1. 安裝
 
 ```bash
-pip install "walletlogin[fastapi] @ git+https://github.com/AndrewTsai0612/walletlogin.git@v0.1.0"
+pip install "walletlogin[fastapi] @ git+https://github.com/AndrewTsai0612/walletlogin.git@v0.2.0"
 ```
 
-`[fastapi]` 會一併安裝 FastAPI；`@v0.1.0` 指定版本，去掉則安裝最新版。
+`[fastapi]` 會一併安裝 FastAPI；`@v0.2.0` 指定版本，去掉則安裝最新版。
 
 本機開發時也可以直接安裝資料夾：`pip install -e path/to/walletlogin`
 
@@ -67,7 +72,7 @@ def cart(address: str = Depends(wallet_login.current_user)):
 </script>
 ```
 
-完成。使用者打開網頁會看到 QR Code，用錢包 App 掃描、簽名後就會登入。
+完成。用電腦打開網頁會看到 QR Code，用手機打開會看到「用錢包 App 開啟」按鈕，兩種都由元件處理。
 
 ---
 
@@ -76,7 +81,8 @@ def cart(address: str = Depends(wallet_login.current_user)):
 | 事情 | 誰負責 |
 |---|---|
 | 產生登入請求、Nonce、驗證簽名、防重放、檢查過期 | 套件 |
-| 顯示 QR Code、倒數、詢問狀態、過期後重新產生 | 套件（前端元件） |
+| 顯示 QR Code 或「用錢包 App 開啟」按鈕、倒數、詢問狀態、過期後重新產生 | 套件（前端元件） |
+| 手機登入的兌換碼（防止登入連結釣魚） | 套件 |
 | 登入成功後要做什麼（建立會員、記錄登入） | 網站（`on_login`） |
 | 使用者資料要存什麼 | 網站 |
 | 網站畫面 | 網站（元件可以調整顏色） |
@@ -105,6 +111,7 @@ def cart(address: str = Depends(wallet_login.current_user)):
 |---|---|---|
 | `onSuccess(token, address)` | | 登入成功時呼叫 |
 | `basePath` | `/walletlogin` | 要和後端的 `prefix` 相同 |
+| `mode` | `"auto"` | `"auto"`：電腦顯示 QR Code、手機顯示 App 按鈕；`"qr"`、`"app"`：固定使用其中一種 |
 | `pollInterval` | `1500` | 詢問登入狀態的間隔（毫秒） |
 | `debug` | `false` | 顯示 QR Code 原始內容，開發測試用 |
 
@@ -124,9 +131,9 @@ def cart(address: str = Depends(wallet_login.current_user)):
 
 | 方法 | 路徑 | 誰呼叫 | 用途 |
 |---|---|---|---|
-| POST | `{prefix}/session` | 網頁 | 建立登入請求，回傳 QR Code 內容 |
-| POST | `{prefix}/verify` | 手機 | 送出簽名 |
-| POST | `{prefix}/status` | 網頁 | 詢問登入狀態，成功時取得 JWT |
+| POST | `{prefix}/session` | 網頁 | 建立登入請求，回傳 QR Code 內容；手機登入時另外回傳 App 連結 |
+| POST | `{prefix}/verify` | 手機 | 送出簽名；手機登入時回傳兌換碼 |
+| POST | `{prefix}/status` | 網頁 | 詢問登入狀態，成功時取得 JWT；手機登入時必須附上兌換碼 |
 | GET | `{prefix}/walletlogin.js` | 網頁 | 前端元件 |
 
 詳細格式見 [PROTOCOL.md](PROTOCOL.md)。
@@ -142,9 +149,9 @@ from walletlogin import WalletLoginCore, WalletLoginError
 
 core = WalletLoginCore(origin="https://shop.example.com", secret="...", verify_path="/walletlogin/verify")
 
-core.create_session()                           # → dict，回傳給網頁
-core.verify(session_id, message, signature)     # → 錢包地址；失敗時拋出 WalletLoginError
-core.poll(session_id, poll_token)               # → {"status": "pending"} 或 {"status": "ok", "token": ..., "address": ...}
+core.create_session()                           # → dict，回傳給網頁（手機登入：create_session("same_device", return_url)）
+core.verify(session_id, message, signature)     # → {"address": ..., "code": 兌換碼或 None}；失敗時拋出 WalletLoginError
+core.poll(session_id, poll_token, code=None)    # → {"status": "pending"} 或 {"status": "ok", "token": ..., "address": ...}
 core.authenticate(jwt)                          # → 錢包地址；無效時拋出 WalletLoginError
 ```
 
@@ -180,6 +187,8 @@ client.post("/walletlogin/verify", json=payload)
 - **每次登入的訊息都不同**（一次性 Nonce），舊簽名無法重複使用
 - **簽名綁定網站網域**：A 網站的簽名不能拿到 B 網站使用
 - **QR Code 不含秘密**：網頁領取 JWT 需要另一組只有它知道的 `poll_token`，旁人偷拍 QR Code 也搶不走登入
+- **手機登入使用兌換碼**：登入結果只會交給跟錢包同一支手機上的瀏覽器。駭客就算把自己發起的登入連結騙你點開，也拿不到登入
+- **返回網址必須屬於網站本身**：網站和錢包都會檢查，避免兌換碼被送到其他網站
 - **正式上線必須使用 HTTPS**
 
 ---
@@ -205,31 +214,32 @@ walletlogin/
 │       └── THIRD_PARTY_NOTICES.md
 └── tests/
     ├── test_core.py          ← 核心流程與攻擊情境（20 項）
+    ├── test_same_device.py   ← 手機登入與兌換碼，含釣魚情境（16 項）
     ├── test_fastapi.py       ← 轉接層（5 項）
     └── test_dart_compat.py   ← 錢包 App 的簽名能被正確驗證（2 項）
 ```
 
 ### [core.py](src/walletlogin/core.py)：核心
 
-[`WalletLoginCore`](src/walletlogin/core.py:36) 有四個方法，對應登入流程的每一步：
+[`WalletLoginCore`](src/walletlogin/core.py:46) 有四個方法，對應登入流程的每一步：
 
 | 方法 | 誰觸發 | 做什麼 |
 |---|---|---|
-| [`create_session`](src/walletlogin/core.py:67) | 網頁 | 產生 `session_id`、`nonce`、`poll_token`，組出 QR Code 內容 |
-| [`verify`](src/walletlogin/core.py:98) | 手機 | 驗證簽名（四道檢查，見下表），成功後呼叫 `on_login` |
-| [`poll`](src/walletlogin/core.py:138) | 網頁 | 回報登入狀態；成功時發 JWT 並刪除登入請求 |
-| [`authenticate`](src/walletlogin/core.py:156) | 網站 API | 檢查 JWT，回傳登入者地址 |
+| [`create_session`](src/walletlogin/core.py:77) | 網頁 | 產生 `session_id`、`nonce`、`poll_token`，組出 QR Code 內容；手機登入時先用 [`_check_return_url`](src/walletlogin/core.py:126) 確認返回網址屬於本網站，並產生 App 連結 |
+| [`verify`](src/walletlogin/core.py:137) | 手機 | 驗證簽名（四道檢查，見下表），成功後呼叫 `on_login`；手機登入時產生兌換碼 |
+| [`poll`](src/walletlogin/core.py:181) | 網頁 | 回報登入狀態；手機登入時必須出示兌換碼；成功時發 JWT 並刪除登入請求 |
+| [`authenticate`](src/walletlogin/core.py:207) | 網站 API | 檢查 JWT，回傳登入者地址 |
 
 `verify` 的四道檢查：
 
 | 步驟 | 程式位置 | 檢查什麼 | 擋住什麼攻擊 |
 |---|---|---|---|
-| (1) | [第 100 行](src/walletlogin/core.py:100) | 登入請求存在且沒過期 | 過期或捏造的請求 |
-| (2) | [第 105 行](src/walletlogin/core.py:105) | 訊息中的網域、網址、Nonce、Request ID、版本都與登入請求一致 | 拿別的網站、別的登入請求的簽名來用 |
-| (3) | [第 119 行](src/walletlogin/core.py:119) | 從簽名**反推**簽署者地址，必須等於訊息中的地址 | 偽造簽名、竄改訊息 |
-| (4) | [第 127 行](src/walletlogin/core.py:127) | 這個登入請求還沒被用過 | 重放攻擊 |
+| (1) | [第 142 行](src/walletlogin/core.py:142) | 登入請求存在且沒過期 | 過期或捏造的請求 |
+| (2) | [第 147 行](src/walletlogin/core.py:147) | 訊息中的網域、網址、Nonce、Request ID、版本都與登入請求一致 | 拿別的網站、別的登入請求的簽名來用 |
+| (3) | [第 161 行](src/walletlogin/core.py:161) | 從簽名**反推**簽署者地址，必須等於訊息中的地址 | 偽造簽名、竄改訊息 |
+| (4) | [第 169 行](src/walletlogin/core.py:169) | 這個登入請求還沒被用過 | 重放攻擊 |
 
-[`_normalize_origin`](src/walletlogin/core.py:164) 檢查網站網址格式（必須是 `http(s)://網域`，不能有路徑）。
+[`_normalize_origin`](src/walletlogin/core.py:215) 檢查網站網址格式（必須是 `http(s)://網域`，不能有路徑）。
 
 ### [siwe.py](src/walletlogin/siwe.py)：簽名訊息格式
 
@@ -244,9 +254,9 @@ walletlogin/
 
 ### [store.py](src/walletlogin/store.py)：登入請求暫存
 
-- [`LoginSession`](src/walletlogin/store.py:18)：一個登入請求，記錄 `session_id`、`nonce`、`poll_token`、過期時間、驗證後的地址
-- [`SessionStore`](src/walletlogin/store.py:31)：暫存的介面（四個方法）
-- [`MemoryStore`](src/walletlogin/store.py:49)：預設實作，存在記憶體。用 `threading.Lock` 確保 [`mark_verified`](src/walletlogin/store.py:70) 的「檢查是否用過」和「標記為已用」不會被插隊
+- [`LoginSession`](src/walletlogin/store.py:18)：一個登入請求，記錄 `session_id`、`nonce`、`poll_token`、過期時間、模式（跨裝置／同一裝置）、返回網址、驗證後的地址與兌換碼
+- [`SessionStore`](src/walletlogin/store.py:37)：暫存的介面（四個方法）
+- [`MemoryStore`](src/walletlogin/store.py:55)：預設實作，存在記憶體。用 `threading.Lock` 確保 [`mark_verified`](src/walletlogin/store.py:76) 的「檢查是否用過」和「標記為已用」不會被插隊
 
 ### [tokens.py](src/walletlogin/tokens.py)：JWT
 
@@ -254,22 +264,24 @@ walletlogin/
 
 ### [fastapi.py](src/walletlogin/fastapi.py)：FastAPI 轉接層
 
-[`WalletLogin`](src/walletlogin/fastapi.py:62) 建立一個 `WalletLoginCore`，再把它包成 4 個 API（`router`）。核心拋出的 `WalletLoginError` 會轉成對應的 HTTP 錯誤。
+[`WalletLogin`](src/walletlogin/fastapi.py:70) 建立一個 `WalletLoginCore`，再把它包成 4 個 API（`router`）。核心拋出的 `WalletLoginError` 會轉成對應的 HTTP 錯誤。
 
-[`current_user`](src/walletlogin/fastapi.py:85) 是 FastAPI 的「依賴」：`Depends(wallet_login.current_user)` 表示執行 API 前先檢查 JWT，沒登入就直接回 401，有登入就把地址傳進來。
+[`current_user`](src/walletlogin/fastapi.py:93) 是 FastAPI 的「依賴」：`Depends(wallet_login.current_user)` 表示執行 API 前先檢查 JWT，沒登入就直接回 401，有登入就把地址傳進來。
 
 `/walletlogin.js` 會把 `qrcode.min.js` 和 `walletlogin.js` 合併成一個檔案回傳，網站只要載入一次。
 
 ### [static/walletlogin.js](src/walletlogin/static/walletlogin.js)：前端元件
 
-[`mount`](src/walletlogin/static/walletlogin.js:54) 在指定的元素裡畫出 QR Code、狀態文字、倒數、重新產生按鈕：
+[`mount`](src/walletlogin/static/walletlogin.js:104) 在指定的元素裡畫出登入畫面。用 [`isMobile`](src/walletlogin/static/walletlogin.js:65) 判斷裝置：電腦顯示 QR Code，手機顯示「用錢包 App 開啟」按鈕。
 
 | 函式 | 做什麼 |
 |---|---|
-| [`start`](src/walletlogin/static/walletlogin.js:116) | 呼叫 `/session` → 畫 QR Code → 開始倒數 → 每 1.5 秒呼叫 `poll` |
-| [`poll`](src/walletlogin/static/walletlogin.js:148) | 呼叫 `/status`，成功時呼叫網站的 `onSuccess(token, address)` |
-| [`renderQr`](src/walletlogin/static/walletlogin.js:92) | 用 QR Code 函式庫畫出 SVG 圖片 |
-| [`showExpired`](src/walletlogin/static/walletlogin.js:100) | QR Code 過期：圖片變淡，顯示「重新產生」按鈕 |
+| [`start`](src/walletlogin/static/walletlogin.js:211) | 呼叫 `/session` → 畫 QR Code 或 App 按鈕 → 開始倒數。QR Code 模式每 1.5 秒呼叫 `poll` |
+| [`poll`](src/walletlogin/static/walletlogin.js:241) | 呼叫 `/status`，成功時呼叫網站的 `onSuccess(token, address)` |
+| [`renderQr`](src/walletlogin/static/walletlogin.js:188) | 用 QR Code 函式庫畫出 SVG 圖片 |
+| [`renderAppButton`](src/walletlogin/static/walletlogin.js:201) | 手機：把 `poll_token` 存進 `localStorage`（App 切回時會開新分頁，分頁之間只有 localStorage 共用），顯示 App 按鈕 |
+| [`completeWithCode`](src/walletlogin/static/walletlogin.js:255) | App 切回網頁時：從網址 `#walletlogin_code=` 讀出兌換碼並從網址列移除，加上 localStorage 中的 `poll_token` 完成登入 |
+| [`showExpired`](src/walletlogin/static/walletlogin.js:164) | QR Code 過期：圖片變淡，顯示「重新產生」按鈕 |
 
 樣式以 `<style id="wl-style">` 注入頁面，所有 class 都以 `wl-` 開頭，避免和網站原本的樣式衝突。
 
